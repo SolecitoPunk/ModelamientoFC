@@ -1,0 +1,493 @@
+! =======================================================
+! PROGRAMA PARA CALCULAR EL ESTADO BASE L=0 DEL
+! ATOMO DE HELIO MEDIANTE EL METODO DE HATREE FOCK ROOTHAAN
+! =======================================================
+!
+! N=NS       : NUMERO DE ELEMENTOS DE LA BASE
+! PRECISION  : PRECISION PARA LA AUTOCONSISTENCIA
+! ALFA       : COEFICIENTES DE LA BASE GTO
+! C          : VECTOR SOLUCION DEL PROBLEMA DE VALORES PROPIOS
+! DENSMAT    : MATRIZ DENSIDAD NORMALIZADA  D=2 C C^T/(C^T C)
+! SMATRIZ    : MATRIZ DE SUPERPOSICION
+! HAMILTON   : MATRIZ HAMILTONIANA (1 cuerpo)
+! GMATRIZ    : MATRIZ Q (interaccion bielectronica)
+! FMATRIZ    : MATRIZ DE FOCK  F = H + G
+! QMATRIZ    : INTEGRALES BIELECTRONICAS <RT|G|SU>
+! VALP       : VALORES PROPIOS
+! VECP       : VECTORES PROPIOS (columnas)
+! Y,Z,D      : MATRICES DE TRABAJO
+! BETA,H1,H2 : VECTORES DE TRABAJO
+! =======================================================
+
+program HEHFR
+  implicit none
+  integer, parameter :: NS = 4
+  integer, parameter :: N  = 4
+  real(8), parameter :: PRECISION = 1.0d-11
+
+  real(8) :: ALFA(NS), C(NS), DENSMAT(NS,NS)
+  real(8) :: SMATRIZ(NS,NS), HAMILTON(NS,NS)
+  real(8) :: GMATRIZ(NS,NS), FMATRIZ(NS,NS)
+  real(8) :: QMATRIZ(NS,NS,NS,NS), VALP(NS), VECP(NS,NS)
+  real(8) :: Y(NS,NS), Z(NS,NS), D(NS,NS)
+  real(8) :: BETA(NS), H1(NS), H2(NS)
+  real(8) :: ENERINI, ENER, DELTA
+  integer :: I, ITER
+
+  ! COEFICIENTES DE GTO PARA EL HELIO EN SU ESTADO BASE
+  ALFA(1) = 0.298073d0
+  ALFA(2) = 1.242567d0
+  ALFA(3) = 5.782948d0
+  ALFA(4) = 38.47497d0
+
+  ! VECTOR INICIAL DE ARRANQUE C = (1, 1, 1, 1)
+  do I = 1, N
+    C(I) = 1.0d0
+  end do
+
+  ! CALCULA MATRICES QUE NO CAMBIAN EN LA AUTOCONSISTENCIA
+  call CALCSMATRIZ(ALFA, SMATRIZ, N, NS)
+  call CALCHMATRIZ(ALFA, HAMILTON, N, NS)
+  call CALCQMATRIZ(ALFA, QMATRIZ, N, NS)
+
+  ! ABRIR ARCHIVO CSV PARA EXPORTAR DATOS DE CONVERGENCIA
+  open(unit=10, file='convergencia_scf.csv', status='replace', action='write')
+  write(10, '(A)') 'iteracion,energia_ua,delta_energia,eigenvalor1'
+
+  ENERINI = -1.0d0
+  ENER    =  0.0d0
+  ITER    =  0
+
+  ! CICLO DE AUTOCONSISTENCIA
+  do while (abs(ENERINI - ENER) > PRECISION)
+    ENERINI = ENER
+    ITER    = ITER + 1
+    call G(DENSMAT, GMATRIZ, QMATRIZ, N, NS)
+    call CALCFOCKMATRIZ(HAMILTON, GMATRIZ, FMATRIZ, N, NS)
+    call EIGENX(FMATRIZ, SMATRIZ, NS, N, VALP, VECP, Y, Z, D, BETA, H1, H2)
+    call ENERGIA(ENER, C, DENSMAT, SMATRIZ, HAMILTON, N, NS, VECP, VALP)
+
+    ! CALCULAR DELTA Y ESCRIBIR FILA EN EL CSV
+    DELTA = abs(ENER - ENERINI)
+    write(10, '(I5, A, F20.10, A, ES15.6, A, F20.10)') &
+          ITER, ',', ENER, ',', DELTA, ',', VALP(1)
+  end do
+
+  close(10)
+
+  write(6,*)
+  write(6,'(A,I5)')    ' ITERACIONES SCF          :', ITER
+  write(6,'(A,F16.9)') ' ENERGIA FINAL (u.a.)     :', ENER
+  write(6,'(A,ES12.4)') ' CONVERGENCIA ALCANZADA   :', DELTA
+  write(6,'(A)')        ' DATOS EXPORTADOS A: convergencia_scf.csv'
+
+end program HEHFR
+
+! =======================================================
+! CALCULO DE LA MATRIZ DE SUPERPOSICION
+! S_pq = (pi/(a_p+a_q))^(3/2)
+! =======================================================
+subroutine CALCSMATRIZ(ALFA, SMATRIZ, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: ALFA(NS)
+  real(8), intent(out) :: SMATRIZ(NS,NS)
+  integer :: R, S
+  real(8) :: PI, FACTOR
+
+  PI = 4.0d0 * datan(1.0d0)
+  do R = 1, N
+    do S = 1, R-1
+      FACTOR = PI / (ALFA(R) + ALFA(S))
+      SMATRIZ(R,S) = FACTOR * dsqrt(FACTOR)
+      SMATRIZ(S,R) = SMATRIZ(R,S)
+    end do
+    FACTOR = PI / (2.0d0 * ALFA(R))
+    SMATRIZ(R,R) = FACTOR * dsqrt(FACTOR)
+  end do
+end subroutine CALCSMATRIZ
+
+! =======================================================
+! CALCULO DE LA MATRIZ HAMILTONIANA (CINETICA + COULOMB)
+! =======================================================
+subroutine CALCHMATRIZ(ALFA, HAMILTON, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: ALFA(NS)
+  real(8), intent(out) :: HAMILTON(NS,NS)
+  integer :: R, S
+  real(8) :: A, B
+  real(8) :: CINET11, COUL11
+
+  do R = 1, N
+    do S = 1, R-1
+      A = ALFA(R)
+      B = ALFA(S)
+      HAMILTON(R,S) = CINET11(A,B) + COUL11(A,B)
+      HAMILTON(S,R) = HAMILTON(R,S)
+    end do
+    A = ALFA(R)
+    HAMILTON(R,R) = CINET11(A,A) + COUL11(A,A)
+  end do
+end subroutine CALCHMATRIZ
+
+! =======================================================
+! ELEMENTO MATRICIAL DE ENERGIA CINETICA
+! T_pq = 3*a_p*a_q*pi^(3/2) / (a_p+a_q)^(5/2)
+! =======================================================
+real(8) function CINET11(A, B)
+  implicit none
+  real(8), intent(in) :: A, B
+  real(8) :: PI, ALPH, FACTOR
+
+  PI     = 4.0d0 * datan(1.0d0)
+  ALPH   = A + B
+  FACTOR = PI / ALPH
+  CINET11 = 3.0d0 * FACTOR * dsqrt(FACTOR) * A * B / ALPH
+end function CINET11
+
+! =======================================================
+! ELEMENTO MATRICIAL DE COULOMB (NUCLEO-ELECTRON, Z=2)
+! V_pq = -4*pi / (a_p + a_q)
+! =======================================================
+real(8) function COUL11(A, B)
+  implicit none
+  real(8), intent(in) :: A, B
+  real(8) :: PI
+
+  PI = 4.0d0 * datan(1.0d0)
+  COUL11 = -4.0d0 * PI / (A + B)
+end function COUL11
+
+! =======================================================
+! CALCULO DE LAS INTEGRALES BIELECTRONICAS <RT|1/r12|SU>
+! (SOLO SE CALCULAN LOS ELEMENTOS CON R>=S)
+! =======================================================
+subroutine CALCQMATRIZ(ALFA, QMATRIZ, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: ALFA(NS)
+  real(8), intent(out) :: QMATRIZ(NS,NS,NS,NS)
+  integer :: R, S, T, U, MAXU
+  real(8) :: PI, FAC, AB, MATELEM
+
+  PI  = 4.0d0 * datan(1.0d0)
+  FAC = 2.0d0 * PI * PI * dsqrt(PI)
+
+  do R = 1, N
+    do S = 1, R
+      do T = 1, R
+        if (T < R) then
+          MAXU = T
+        else
+          MAXU = S
+        end if
+        do U = 1, MAXU
+          AB      = (ALFA(R)+ALFA(S)) * (ALFA(T)+ALFA(U))
+          MATELEM = FAC / ( dsqrt(ALFA(R)+ALFA(S)+ALFA(T)+ALFA(U)) * AB )
+          QMATRIZ(R,S,T,U) = MATELEM
+          QMATRIZ(R,S,U,T) = MATELEM
+          QMATRIZ(T,U,R,S) = MATELEM
+          QMATRIZ(T,U,S,R) = MATELEM
+        end do
+      end do
+    end do
+  end do
+end subroutine CALCQMATRIZ
+
+! =======================================================
+! CALCULO DE LA MATRIZ G
+! G(R,S) = SUM_{T,U} D(T,U) * Q(R,S,T,U)
+! =======================================================
+subroutine G(DENSMAT, GMATRIZ, QMATRIZ, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: DENSMAT(NS,NS), QMATRIZ(NS,NS,NS,NS)
+  real(8), intent(out) :: GMATRIZ(NS,NS)
+  integer :: R, S, T, U
+
+  do R = 1, N
+    do S = 1, R
+      GMATRIZ(R,S) = 0.0d0
+      do T = 1, N
+        do U = 1, T-1
+          GMATRIZ(R,S) = GMATRIZ(R,S) + DENSMAT(T,U) * QMATRIZ(R,S,T,U)
+        end do
+        GMATRIZ(R,S) = GMATRIZ(R,S) + 0.5d0 * DENSMAT(T,T) * QMATRIZ(R,S,T,T)
+      end do
+      GMATRIZ(S,R) = GMATRIZ(R,S)
+    end do
+  end do
+end subroutine G
+
+! =======================================================
+! CALCULO DE LA MATRIZ DE FOCK: F = H + G
+! =======================================================
+subroutine CALCFOCKMATRIZ(HAMILTON, GMATRIZ, FMATRIZ, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: HAMILTON(NS,NS), GMATRIZ(NS,NS)
+  real(8), intent(out) :: FMATRIZ(NS,NS)
+  integer :: R, S
+
+  do R = 1, N
+    do S = 1, R
+      FMATRIZ(R,S) = HAMILTON(R,S) + GMATRIZ(R,S)
+      FMATRIZ(S,R) = FMATRIZ(R,S)
+    end do
+  end do
+end subroutine CALCFOCKMATRIZ
+
+! =======================================================
+! CALCULO DE LA ENERGIA TOTAL
+! E = E' + sum_{p,q} C_p * C_q * h_pq
+! =======================================================
+subroutine ENERGIA(ENER, C, DENSMAT, SMATRIZ, HAMILTON, N, NS, VECP, VALP)
+  implicit none
+  integer, intent(in)    :: N, NS
+  real(8), intent(out)   :: ENER
+  real(8), intent(inout) :: C(NS), DENSMAT(NS,NS)
+  real(8), intent(in)    :: SMATRIZ(NS,NS), HAMILTON(NS,NS)
+  real(8), intent(in)    :: VECP(NS,NS), VALP(NS)
+  integer :: I, J
+
+  ! TOMAR EL VECTOR PROPIO DEL ESTADO BASE (MENOR EIGENVALOR)
+  do I = 1, N
+    C(I) = VECP(I, 1)
+  end do
+
+  call DENSMAT1(C, DENSMAT, SMATRIZ, N, NS)
+
+  ENER = VALP(1)
+  do I = 1, N
+    do J = 1, I-1
+      ENER = ENER + DENSMAT(I,J) * HAMILTON(I,J)
+    end do
+    ENER = ENER + 0.5d0 * DENSMAT(I,I) * HAMILTON(I,I)
+  end do
+
+end subroutine ENERGIA
+
+! =======================================================
+! CALCULO DE LA MATRIZ DENSIDAD NORMALIZADA
+! D = 2 * C * C^T / (C^T * S * C)
+! =======================================================
+subroutine DENSMAT1(C, DENSMAT, SMATRIZ, N, NS)
+  implicit none
+  integer, intent(in)  :: N, NS
+  real(8), intent(in)  :: C(NS), SMATRIZ(NS,NS)
+  real(8), intent(out) :: DENSMAT(NS,NS)
+  integer :: R, S
+  real(8) :: NORM
+
+  NORM = 0.0d0
+  do R = 1, N
+    do S = 1, R-1
+      DENSMAT(R,S) = 2.0d0 * C(R) * C(S)
+      DENSMAT(S,R) = DENSMAT(R,S)
+      NORM = NORM + DENSMAT(R,S) * SMATRIZ(R,S)
+    end do
+    DENSMAT(R,R) = 2.0d0 * C(R) * C(R)
+    NORM = NORM + 0.5d0 * DENSMAT(R,R) * SMATRIZ(R,R)
+  end do
+
+  NORM = 1.0d0 / NORM
+  do R = 1, N
+    do S = 1, N
+      DENSMAT(R,S) = DENSMAT(R,S) * NORM
+    end do
+  end do
+end subroutine DENSMAT1
+
+! =======================================================
+! SUBRUTINA EIGENX
+!
+! RESUELVE EL PROBLEMA DE VALORES PROPIOS GENERALIZADO:
+!     F * C = E' * S * C
+!
+! METODO:
+!   PASO 1: CHOLESKY  S = L * L^T
+!   PASO 2: TRANSFORMAR  A = L^{-1} * F * L^{-T}
+!   PASO 3: DIAGONALIZAR A POR JACOBI
+!   PASO 4: RECUPERAR  C = L^{-T} * y
+!   PASO 5: ORDENAR EIGENVALORES DE MENOR A MAYOR
+! =======================================================
+subroutine EIGENX(FMATRIZ, SMATRIZ, NS, N, VALP, VECP, Y, Z, D, BETA, H1, H2)
+  implicit none
+  integer, intent(in)  :: NS, N
+  real(8), intent(in)  :: FMATRIZ(NS,NS), SMATRIZ(NS,NS)
+  real(8), intent(out) :: VALP(NS), VECP(NS,NS)
+  real(8), intent(out) :: Y(NS,NS), Z(NS,NS), D(NS,NS)
+  real(8), intent(out) :: BETA(NS), H1(NS), H2(NS)
+
+  integer :: I, J, K, L, IP, IQ, ITER
+  real(8) :: SUM, TEMP, TEMP2, AVG
+  real(8) :: ZDIAG, T, COSINE, SINE, TAU, AMAX
+  integer, parameter :: MAXITER = 10000
+  real(8), parameter :: EPSJAC  = 1.0d-14
+
+  ! ---- PASO 1: CHOLESKY DE S = L * L^T, L SE GUARDA EN D ----
+  D = 0.0d0
+  do I = 1, N
+    SUM = SMATRIZ(I,I)
+    do K = 1, I-1
+      SUM = SUM - D(I,K)*D(I,K)
+    end do
+    if (SUM <= 0.0d0) then
+      write(6,*) 'ERROR EN EIGENX: S NO ES DEFINIDA POSITIVA'
+      stop
+    end if
+    D(I,I) = dsqrt(SUM)
+    do J = I+1, N
+      SUM = SMATRIZ(J,I)
+      do K = 1, I-1
+        SUM = SUM - D(J,K)*D(I,K)
+      end do
+      D(J,I) = SUM / D(I,I)
+    end do
+  end do
+
+  ! ---- CALCULAR L^{-1}, GUARDAR EN Y ----
+  Y = 0.0d0
+  do I = 1, N
+    Y(I,I) = 1.0d0 / D(I,I)
+    do J = I+1, N
+      SUM = 0.0d0
+      do K = I, J-1
+        SUM = SUM + D(J,K) * Y(K,I)
+      end do
+      Y(J,I) = -SUM / D(J,J)
+    end do
+  end do
+
+  ! ---- PASO 2: CONSTRUIR A = L^{-1} * F * (L^{-1})^T, GUARDAR EN Z ----
+  Z = 0.0d0
+  do I = 1, N
+    do J = 1, N
+      do K = 1, N
+        do L = 1, N
+          Z(I,J) = Z(I,J) + Y(I,K) * FMATRIZ(K,L) * Y(J,L)
+        end do
+      end do
+    end do
+  end do
+
+  ! SIMETRIZAR PARA EVITAR ERRORES NUMERICOS
+  do I = 1, N
+    do J = I+1, N
+      AVG    = 0.5d0 * (Z(I,J) + Z(J,I))
+      Z(I,J) = AVG
+      Z(J,I) = AVG
+    end do
+  end do
+
+  ! ---- PASO 3: DIAGONALIZACION DE JACOBI ----
+  ! INICIALIZAR VECP COMO LA IDENTIDAD
+  VECP = 0.0d0
+  do I = 1, N
+    VECP(I,I) = 1.0d0
+    VALP(I)   = Z(I,I)
+  end do
+
+  do ITER = 1, MAXITER
+
+    ! BUSCAR EL MAXIMO ELEMENTO FUERA DE LA DIAGONAL
+    AMAX = 0.0d0
+    IP = 1
+    IQ = 2
+    do I = 1, N-1
+      do J = I+1, N
+        if (dabs(Z(I,J)) > AMAX) then
+          AMAX = dabs(Z(I,J))
+          IP = I
+          IQ = J
+        end if
+      end do
+    end do
+
+    ! CRITERIO DE CONVERGENCIA
+    if (AMAX < EPSJAC) exit
+
+    ! CALCULAR ANGULO DE ROTACION (FORMULA NUMERICAMENTE ESTABLE)
+    ZDIAG = Z(IQ,IQ) - Z(IP,IP)
+    if (dabs(ZDIAG) < 1.0d-300) then
+      T = 1.0d0
+    else
+      T = dsign(1.0d0, ZDIAG) / (dabs(ZDIAG) + dsqrt(ZDIAG**2 + 4.0d0*Z(IP,IQ)**2))
+      T = 2.0d0 * T * Z(IP,IQ)
+      if (dabs(ZDIAG + T*Z(IP,IQ)) > 1.0d-300) then
+        T = T / (ZDIAG + T*Z(IP,IQ))
+      else
+        T = 1.0d0
+      end if
+    end if
+    COSINE = 1.0d0 / dsqrt(1.0d0 + T*T)
+    SINE   = T * COSINE
+    TAU    = SINE / (1.0d0 + COSINE)
+
+    ! ACTUALIZAR DIAGONAL
+    Z(IP,IP) = Z(IP,IP) - T * Z(IP,IQ)
+    Z(IQ,IQ) = Z(IQ,IQ) + T * Z(IP,IQ)
+    Z(IP,IQ) = 0.0d0
+    Z(IQ,IP) = 0.0d0
+
+    ! ACTUALIZAR ELEMENTOS FUERA DE LA DIAGONAL
+    do K = 1, N
+      if (K /= IP .and. K /= IQ) then
+        TEMP  = Z(K,IP)
+        TEMP2 = Z(K,IQ)
+        Z(K,IP) = TEMP  - SINE*(TEMP2 + TAU*TEMP)
+        Z(K,IQ) = TEMP2 + SINE*(TEMP  - TAU*TEMP2)
+        Z(IP,K) = Z(K,IP)
+        Z(IQ,K) = Z(K,IQ)
+      end if
+    end do
+
+    ! ACUMULAR ROTACION EN VECP
+    do K = 1, N
+      TEMP  = VECP(K,IP)
+      TEMP2 = VECP(K,IQ)
+      VECP(K,IP) = TEMP  - SINE*(TEMP2 + TAU*TEMP)
+      VECP(K,IQ) = TEMP2 + SINE*(TEMP  - TAU*TEMP2)
+    end do
+
+    ! ACTUALIZAR VALORES PROPIOS
+    do I = 1, N
+      VALP(I) = Z(I,I)
+    end do
+
+  end do
+
+  if (ITER > MAXITER) then
+    write(6,*) 'ADVERTENCIA: JACOBI NO CONVERGIO EN', MAXITER, ' ITERACIONES'
+  end if
+
+  ! ---- PASO 4: RECUPERAR VECTORES ORIGINALES C = L^{-T} * y ----
+  ! L^{-T} es la transpuesta de Y (que contiene L^{-1})
+  Z = 0.0d0
+  do I = 1, N
+    do J = 1, N
+      do K = 1, N
+        Z(I,J) = Z(I,J) + Y(K,I) * VECP(K,J)
+      end do
+    end do
+  end do
+  VECP = Z
+
+  ! ---- PASO 5: ORDENAR DE MENOR A MAYOR (BURBUJA) ----
+  do I = 1, N-1
+    do J = I+1, N
+      if (VALP(J) < VALP(I)) then
+        TEMP    = VALP(I)
+        VALP(I) = VALP(J)
+        VALP(J) = TEMP
+        do K = 1, N
+          TEMP       = VECP(K,I)
+          VECP(K,I)  = VECP(K,J)
+          VECP(K,J)  = TEMP
+        end do
+      end if
+    end do
+  end do
+
+end subroutine EIGENX
