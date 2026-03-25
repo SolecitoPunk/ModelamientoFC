@@ -1,0 +1,6 @@
+# This file is used internally by FFMPEG.
+file 'file:/home/solecito-punk/Escritorio/mineria/modelamiento/ModelamientoFC/HFR_Helio/recursos/media/videos/recursos/1080p60/partial_movie_files/Helio3B1B/3529212410_48996900_223132457.mp4'
+file 'file:/home/solecito-punk/Escritorio/mineria/modelamiento/ModelamientoFC/HFR_Helio/recursos/media/videos/recursos/1080p60/partial_movie_files/Helio3B1B/3040924799_2843251098_3344860160.mp4'
+file 'file:/home/solecito-punk/Escritorio/mineria/modelamiento/ModelamientoFC/HFR_Helio/recursos/media/videos/recursos/1080p60/partial_movie_files/Helio3B1B/3040924799_1830721266_2673757887.mp4'
+file 'file:/home/solecito-punk/Escritorio/mineria/modelamiento/ModelamientoFC/HFR_Helio/recursos/media/videos/recursos/1080p60/partial_movie_files/Helio3B1B/3040924799_2951272126_3522818242.mp4'
+file 'file:/home/solecito-punk/Escritorio/mineria/modelamiento/ModelamientoFC/HFR_Helio/recursos/media/videos/recursos/1080p60/partial_movie_files/Helio3B1B/3040924799_4070917045_2395562875.mp4'
